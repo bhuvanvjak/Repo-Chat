@@ -1,0 +1,14 @@
+langchain==0.3.*
+langgraph==0.2.*
+langchain-community==0.3.*
+langchain-groq==0.2.*
+langchain-huggingface==0.1.*
+sentence-transformers==3.*
+langchain-chroma==0.2.*
+langchain-text-splitters==0.3.*
+chromadb==0.5.*
+GitPython==3.1.*
+fastapi==0.115.*
+uvicorn[standard]==0.30.*
+pydantic==2.*
+python-dotenv==1.*
