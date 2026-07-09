@@ -1,4 +1,4 @@
-# GitReader
+# Repo Chat
 
 A "chat with any git repo" agent: a LangGraph ReAct agent (chat reasoning via the
 free [Groq](https://console.groq.com) API, embeddings run locally via
