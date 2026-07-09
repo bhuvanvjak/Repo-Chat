@@ -59,18 +59,14 @@ def _get_embeddings(embedding_model: str) -> HuggingFaceEmbeddings:
     )
 
 
-def build_or_load_vectorstore(
+def get_or_create_store(
     repo_path: str,
-    chunks: list[Document] | None = None,
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
     force_rebuild: bool = False,
-) -> Chroma:
-    """
-    Build a new persistent Chroma collection for this repo, or load the existing one.
-
-    If `chunks` is provided and (force_rebuild or the collection is empty/new),
-    the chunks are embedded and inserted.
-    """
+) -> tuple[Chroma, bool]:
+    """Open (or create) the persistent Chroma collection for this repo. Returns
+    (store, is_new) — is_new is True when the caller still needs to embed and add
+    chunks (a fresh collection, or force_rebuild was requested)."""
     os.makedirs(CHROMA_ROOT, exist_ok=True)
     embeddings = _get_embeddings(embedding_model)
     collection = _collection_name(repo_path)
@@ -83,15 +79,43 @@ def build_or_load_vectorstore(
         embedding_function=embeddings,
         persist_directory=persist_dir,
     )
+    return store, is_new
 
-    if is_new and chunks:
+
+def add_documents_in_batches(store: Chroma, chunks: list[Document], batch_size: int = 64):
+    """Embed and add chunks in batches, yielding (num_done, num_total) after each
+    batch. Splitting the single add_documents() call into batches — rather than
+    embedding everything in one shot — is what lets a caller report live progress
+    for large repos instead of blocking silently for the whole embedding phase."""
+    total = len(chunks)
+    for start in range(0, total, batch_size):
+        batch = chunks[start : start + batch_size]
         # Chroma dedupes by id; use source+chunk_index as a stable id.
         ids = [
             f"{c.metadata.get('source', 'unknown')}::{c.metadata.get('chunk_index', 0)}"
-            for c in chunks
+            for c in batch
         ]
-        store.add_documents(chunks, ids=ids)
+        store.add_documents(batch, ids=ids)
+        yield min(start + batch_size, total), total
 
+
+def build_or_load_vectorstore(
+    repo_path: str,
+    chunks: list[Document] | None = None,
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
+    force_rebuild: bool = False,
+) -> Chroma:
+    """
+    Build a new persistent Chroma collection for this repo, or load the existing one.
+
+    If `chunks` is provided and (force_rebuild or the collection is empty/new),
+    the chunks are embedded and inserted. For progress reporting during embedding,
+    use `get_or_create_store` + `add_documents_in_batches` directly instead.
+    """
+    store, is_new = get_or_create_store(repo_path, embedding_model, force_rebuild)
+    if is_new and chunks:
+        for _ in add_documents_in_batches(store, chunks):
+            pass
     return store
 
 

@@ -141,6 +141,19 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  #progress-track {
+    height: 3px;
+    background: var(--border);
+    display: none;
+  }
+  #progress-track.active { display: block; }
+  #progress-fill {
+    height: 100%;
+    width: 0%;
+    background: var(--accent);
+    transition: width 0.25s ease;
+  }
+
   /* ---------- Chat log ---------- */
   #chat-log {
     flex: 1;
@@ -219,6 +232,17 @@
     border-radius: 4px;
     font-family: "SF Mono", Consolas, "Cascadia Code", monospace;
     font-size: 12px;
+  }
+  .bubble a {
+    color: var(--accent);
+  }
+  .bubble .file-cite {
+    background: var(--code-bg);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-family: "SF Mono", Consolas, "Cascadia Code", monospace;
+    font-size: 12px;
+    color: var(--text-muted);
   }
   .bubble pre.code-block {
     position: relative;
@@ -305,8 +329,10 @@
       <option value="llama-3.3-70b-versatile">Deep</option>
     </select>
     <button id="clear-btn" class="secondary" type="button" title="Clear conversation">Clear chat</button>
+    <button id="settings-btn" class="icon-btn" type="button" title="Settings (Groq API key)">⚙</button>
   </div>
   <div id="status-bar">Not loaded yet.</div>
+  <div id="progress-track"><div id="progress-fill"></div></div>
   <div id="chat-log">
     <div id="empty-state">
       <div class="big-icon">💬</div>

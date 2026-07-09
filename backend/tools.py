@@ -24,7 +24,7 @@ def build_tools(repo_path: str, vectorstore):
         """Semantic/natural-language search over the repo's code and docs.
         Use this for conceptual questions like 'where is auth handled' or
         'how does the retry logic work'. Returns the most relevant chunks."""
-        results = vectorstore.similarity_search(query, k=6)
+        results = vectorstore.similarity_search(query, k=4)
         if not results:
             return "No relevant results found."
         return "\n\n---\n\n".join(
@@ -40,8 +40,12 @@ def build_tools(repo_path: str, vectorstore):
             full = _safe_join(repo_path, relative_path)
             with open(full, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
-            if len(content) > 20_000:
-                return content[:20_000] + "\n\n... [truncated, file is longer]"
+            # Capped well below the default chat model's 8000 tokens/minute Groq
+            # limit — a couple of uncapped file reads plus the growing tool-call
+            # history in one turn could exceed that on their own (413 "request too
+            # large"), independent of any per-minute quota already used elsewhere.
+            if len(content) > 6_000:
+                return content[:6_000] + "\n\n... [truncated, file is longer — ask for a specific section/line range if you need more]"
             return content
         except Exception as e:
             return f"Error reading file: {e}"

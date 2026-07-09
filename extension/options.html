@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>GitReader Setup</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --bg-subtle: #f6f8fa;
+    --border: #d0d7de;
+    --text: #1f2328;
+    --text-muted: #59636e;
+    --accent: #1f6feb;
+    --accent-text: #ffffff;
+    --success: #1a7f37;
+    --error: #cf222e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117;
+      --bg-subtle: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --text-muted: #8b949e;
+      --accent: #388bfd;
+      --accent-text: #ffffff;
+      --success: #3fb950;
+      --error: #ff7b72;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    justify-content: center;
+    padding: 48px 20px;
+  }
+  .card {
+    max-width: 460px;
+    width: 100%;
+  }
+  .logo-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 4px;
+  }
+  .logo-row .icon { font-size: 26px; }
+  h1 { font-size: 19px; margin: 0; }
+  p.lede { color: var(--text-muted); font-size: 13.5px; line-height: 1.6; margin: 14px 0 22px; }
+  .step {
+    background: var(--bg-subtle);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+    margin-bottom: 18px;
+  }
+  .step h2 {
+    font-size: 12.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--text-muted);
+    margin: 0 0 10px;
+  }
+  a { color: var(--accent); }
+  .key-row { display: flex; gap: 6px; }
+  input[type="password"], input[type="text"] {
+    flex: 1;
+    padding: 9px 11px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 13px;
+    min-width: 0;
+  }
+  button {
+    padding: 9px 14px;
+    border-radius: 7px;
+    border: none;
+    background: var(--accent);
+    color: var(--accent-text);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+  }
+  button.ghost {
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+  }
+  #save-btn { margin-top: 12px; width: 100%; }
+  #status {
+    margin-top: 10px;
+    font-size: 12.5px;
+    min-height: 16px;
+  }
+  #status.success { color: var(--success); }
+  #status.error { color: var(--error); }
+  footer { color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo-row"><span class="icon">💬</span><h1>GitReader Setup</h1></div>
+    <p class="lede">
+      GitReader uses <strong>Groq</strong> for fast, free LLM chat — you'll need your own
+      Groq API key (it's free, takes about 30 seconds, no credit card). The key is stored
+      only in your browser and sent only to your own local GitReader backend.
+    </p>
+
+    <div class="step">
+      <h2>1. Get a free key</h2>
+      <p style="margin: 0 0 10px; font-size: 13px;">
+        Open <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer">console.groq.com/keys</a>,
+        sign in, and click "Create API Key".
+      </p>
+    </div>
+
+    <div class="step">
+      <h2>2. Paste it here</h2>
+      <div class="key-row">
+        <input id="key-input" type="password" placeholder="gsk_..." autocomplete="off" />
+        <button id="toggle-btn" class="ghost" type="button" title="Show/hide">👁</button>
+      </div>
+      <button id="save-btn" type="button">Save key</button>
+      <div id="status"></div>
+    </div>
+
+    <footer>
+      You can change this anytime — right-click the GitReader icon → Options, or use the
+      Settings button in the side panel.
+    </footer>
+  </div>
+  <script src="options.js"></script>
+</body>
+</html>

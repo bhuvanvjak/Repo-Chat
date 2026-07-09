@@ -2,19 +2,49 @@
 agent.py — Build a LangGraph ReAct agent (chat reasoning via the Groq API) with
 per-conversation memory, wired up with the repo-exploration tools.
 """
-from groq import BadRequestError
+from groq import APIError, BadRequestError
 from langchain_core.messages import HumanMessage
 from langchain_groq import ChatGroq
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.errors import GraphRecursionError
 from langgraph.prebuilt import create_react_agent
 
 from tools import build_tools
 
-# Groq-hosted Llama models occasionally emit a malformed tool call (400
-# tool_use_failed) when several tools are bound, especially under a multi-tool
-# ReAct setup like this one. It's stochastic — resampling the same turn almost
-# always succeeds — so retry a couple of times before surfacing the error.
+# LangGraph's default recursion_limit (25, ~12 tool-call round trips). Tried
+# lowering this to fail faster/cheaper on genuinely stuck loops, but that backfired
+# hard: openai/gpt-oss-20b routinely explores 5-6 files (list_directory, several
+# read_files) even for simple overview questions before it settles down and
+# answers, and a lower ceiling cut those off mid-exploration far more often than
+# it caught actual runaway loops. Sticking with the default — the real fix for
+# runaway loops is the system prompt telling the model to stop exploring and
+# answer, not a hard ceiling low enough to break normal multi-file questions.
+RECURSION_LIMIT = 25
+
+# Multi-tool Groq agents occasionally hit transient tool-calling glitches that
+# resampling the same turn almost always fixes:
+#   - BadRequestError (HTTP 400, code "tool_use_failed"): the model emitted a
+#     malformed tool call the server couldn't parse.
+#   - Plain APIError ("Failed to parse tool call arguments as JSON"): a client-side
+#     failure to reassemble fragmented tool-call-argument deltas during streaming.
+#     This is a *sibling* of BadRequestError, not a subclass, and has no .body —
+#     so it needs its own check rather than falling under the same isinstance.
+# Both are worth a couple of silent retries before surfacing to the user.
 MAX_TOOL_CALL_RETRIES = 2
+
+
+def _is_retryable_tool_glitch(e: Exception) -> bool:
+    if isinstance(e, BadRequestError):
+        body = getattr(e, "body", None) or {}
+        return body.get("error", {}).get("code") == "tool_use_failed"
+    return isinstance(e, APIError) and "Failed to parse tool call arguments" in str(e)
+
+
+DID_NOT_CONVERGE_MESSAGE = (
+    "I wasn't able to converge on an answer to that within a reasonable number of tool "
+    "calls — it may not be something answerable from the repo's contents alone. Try "
+    "rephrasing, or pointing me at a specific file."
+)
 
 SYSTEM_PROMPT = """You are GitReader, an expert assistant that helps developers understand a
 specific git repository. You have tools to semantically search the codebase, read files,
@@ -25,17 +55,41 @@ Guidelines:
 - Use grep_code for precise symbol/string lookups (exact function names, imports, etc).
 - Use git_log / git_blame when the user asks about history, authorship, or recent changes.
 - Always ground answers in what the tools return — don't guess at code you haven't read.
-- Cite file paths (and line ranges when relevant) in your answers.
 - If you're not sure a file/symbol exists, check with list_directory or grep_code first.
+- Some questions (opinions, intent, "why" questions about decisions not documented in
+  the repo) can't be resolved by more tool calls. After a few searches, if you aren't
+  converging on an answer, say what you found and what you couldn't determine — don't
+  keep calling tools hoping something new turns up.
+- For general "what is this project / what does this do" questions: list_directory
+  plus reading ONE or TWO key files (README if present, otherwise package.json /
+  pyproject.toml / the main entry point) is enough for a good answer. Don't work
+  through the file tree exhaustively — summarize from what you have as soon as you
+  can describe the project's purpose, not after you've read every file.
+
+Citing files: every time you mention a specific file, cite it as a markdown link
+using the `repo://` scheme with the path relative to the repo root — never a plain
+github.com URL (you don't know the branch or host). Add a line range with `#L<start>-L<end>`
+when you're citing a specific location, omit it when referring to the whole file.
+Examples: `[server.py](repo://server.py)` or `[server.py:12-34](repo://server.py#L12-L34)`.
 """
 
 
-def build_agent(repo_path: str, vectorstore, chat_model: str = "openai/gpt-oss-20b"):
+def build_agent(
+    repo_path: str, vectorstore, chat_model: str = "openai/gpt-oss-20b", groq_api_key: str | None = None
+):
     """Return a compiled LangGraph agent. Use a distinct thread_id per conversation
     when invoking it so histories don't mix.
 
-    Requires the GROQ_API_KEY environment variable to be set."""
-    llm = ChatGroq(model=chat_model, temperature=0.1)
+    `groq_api_key` lets each caller (e.g. each browser extension user) supply their
+    own key per request; if omitted, falls back to the GROQ_API_KEY environment
+    variable (e.g. for the CLI in __main__ below, using a local .env).
+
+    Note: ChatGroq only reads GROQ_API_KEY as a *default_factory*, which pydantic
+    only invokes when a field is omitted entirely — explicitly passing api_key=None
+    would suppress that fallback rather than trigger it, so the kwarg is only
+    included when a key was actually supplied."""
+    extra_kwargs = {"api_key": groq_api_key} if groq_api_key else {}
+    llm = ChatGroq(model=chat_model, temperature=0.1, **extra_kwargs)
     tools = build_tools(repo_path, vectorstore)
     checkpointer = MemorySaver()
     # The prebuilt agent's system-prompt kwarg has been renamed across langgraph
@@ -53,16 +107,15 @@ def build_agent(repo_path: str, vectorstore, chat_model: str = "openai/gpt-oss-2
 def ask(agent, thread_id: str, question: str) -> str:
     """Send a question to the agent within a given conversation thread and return
     the final text answer."""
-    config = {"configurable": {"thread_id": thread_id}}
+    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": RECURSION_LIMIT}
     for attempt in range(MAX_TOOL_CALL_RETRIES + 1):
         try:
             result = agent.invoke({"messages": [HumanMessage(content=question)]}, config=config)
             return result["messages"][-1].content
-        except BadRequestError as e:
-            is_tool_use_failure = (
-                getattr(e, "body", None) and e.body.get("error", {}).get("code") == "tool_use_failed"
-            )
-            if not is_tool_use_failure or attempt == MAX_TOOL_CALL_RETRIES:
+        except GraphRecursionError:
+            return DID_NOT_CONVERGE_MESSAGE
+        except APIError as e:
+            if not _is_retryable_tool_glitch(e) or attempt == MAX_TOOL_CALL_RETRIES:
                 raise
 
 
@@ -79,7 +132,7 @@ def ask_stream(agent, thread_id: str, question: str):
     later failure can't be silently retried without duplicating content, so it's
     surfaced as an error event instead.
     """
-    config = {"configurable": {"thread_id": thread_id}}
+    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": RECURSION_LIMIT}
     seen_tool_calls: set[str] = set()
     any_tokens_sent = False
 
@@ -96,12 +149,24 @@ def ask_stream(agent, thread_id: str, question: str):
                     if chunk.content:
                         any_tokens_sent = True
                         yield {"type": "token", "text": chunk.content}
+            # Unlike `.invoke()`, `.stream(stream_mode="messages")` does not raise
+            # GraphRecursionError when the step limit is hit mid-run — it just stops
+            # yielding. If nothing was ever said, that's what happened; say so rather
+            # than silently ending the turn with no reply at all.
+            if not any_tokens_sent:
+                yield {"type": "token", "text": DID_NOT_CONVERGE_MESSAGE}
             return
-        except BadRequestError as e:
-            is_tool_use_failure = (
-                getattr(e, "body", None) and e.body.get("error", {}).get("code") == "tool_use_failed"
-            )
-            if any_tokens_sent or not is_tool_use_failure or attempt == MAX_TOOL_CALL_RETRIES:
+        except GraphRecursionError:
+            if any_tokens_sent:
+                yield {
+                    "type": "error",
+                    "detail": "Stopped after too many tool calls without converging.",
+                }
+            else:
+                yield {"type": "token", "text": DID_NOT_CONVERGE_MESSAGE}
+            return
+        except APIError as e:
+            if any_tokens_sent or not _is_retryable_tool_glitch(e) or attempt == MAX_TOOL_CALL_RETRIES:
                 yield {"type": "error", "detail": str(e)}
                 return
 
