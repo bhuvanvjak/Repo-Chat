@@ -4,7 +4,7 @@ A "chat with any git repo" agent: a LangGraph ReAct agent (chat reasoning via th
 free [Groq](https://console.groq.com) API, embeddings run locally via
 sentence-transformers) with tools for semantic code search, file reading, grep,
 and git history — exposed through a small backend API and used from a Chrome extension
-that auto-detects the repo you're viewing on github.com.
+that auto-detects the repo you're viewing on github.com and answers your questions about that repo.
 
 Only the chat completions call goes to Groq's API; everything else (cloning, indexing,
 embeddings, vector search) runs on your machine.
