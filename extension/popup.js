@@ -1,4 +1,4 @@
-// sidepanel.js — chat UI logic. Talks to the local GitReader FastAPI backend.
+// popup.js — chat UI logic. Talks to the local GitReader FastAPI backend.
 
 const BACKEND_URL = "http://localhost:8000";
 const STORAGE_KEY = "gitreader_session";
@@ -6,10 +6,15 @@ const GROQ_KEY_STORAGE = "gitreader_groq_api_key";
 
 const repoInput = document.getElementById("repo-input");
 const loadBtn = document.getElementById("load-btn");
-const modelSelect = document.getElementById("model-select");
+const modelSeg = document.getElementById("model-select");
 const clearBtn = document.getElementById("clear-btn");
 const settingsBtn = document.getElementById("settings-btn");
+const closeBtn = document.getElementById("close-btn");
+const popoutBtn = document.getElementById("popout-btn");
 const statusBar = document.getElementById("status-bar");
+const statusText = document.getElementById("status-text");
+const statusTimer = document.getElementById("status-timer");
+const statusCancel = document.getElementById("status-cancel");
 const progressTrack = document.getElementById("progress-track");
 const progressFill = document.getElementById("progress-fill");
 const chatLog = document.getElementById("chat-log");
@@ -23,6 +28,116 @@ let messages = []; // {role: 'user'|'assistant'|'error', text: string}
 let isBusy = false;
 let githubRepo = null; // "owner/repo", or null if the loaded repo isn't on github.com
 let defaultBranch = null;
+let loadAbortController = null;
+let chatAbortController = null;
+
+// ---------- Model segmented control ----------
+// Replaces the old <select>; behaves the same from the rest of the code's POV.
+
+function getModel() {
+  const active = modelSeg.querySelector(".seg-btn.active");
+  return active ? active.dataset.value : "openai/gpt-oss-20b";
+}
+
+function setModel(value) {
+  let matched = false;
+  modelSeg.querySelectorAll(".seg-btn").forEach((btn) => {
+    const on = btn.dataset.value === value;
+    btn.classList.toggle("active", on);
+    if (on) matched = true;
+  });
+  // Fall back to the first option if a persisted value no longer exists.
+  if (!matched) modelSeg.querySelector(".seg-btn")?.classList.add("active");
+}
+
+modelSeg.addEventListener("click", (e) => {
+  const btn = e.target.closest(".seg-btn");
+  if (!btn) return;
+  setModel(btn.dataset.value);
+  persistSession();
+});
+
+// ---------- Window vs side-panel mode ----------
+// The same page backs both the docked side panel (default) and the detached
+// popup window (opened via the pop-out button, which appends ?mode=window).
+// Show the relevant header buttons for each: pop-out only makes sense from the
+// panel; the ✕ close only works in the standalone window.
+const isWindowMode = new URLSearchParams(location.search).get("mode") === "window";
+if (isWindowMode) {
+  popoutBtn.classList.add("hidden");
+  closeBtn.classList.remove("hidden");
+} else {
+  popoutBtn.classList.remove("hidden");
+  closeBtn.classList.add("hidden");
+}
+
+// Close button — the detached window stays open until this is pressed.
+closeBtn.addEventListener("click", () => window.close());
+
+// Pop-out button — ask the service worker to (re)open the UI as a floating window.
+popoutBtn.addEventListener("click", () => {
+  chrome.runtime.sendMessage({ action: "popout" });
+});
+
+// ---------- "Thinking" status cycle ----------
+// Rotates friendly status phrases while waiting on the first tool call or token,
+// so a long model round-trip reads as active progress rather than a stalled UI.
+// Once a real tool call comes back, we switch to reporting that instead of guessing.
+const THINKING_PHRASES = [
+  "Thinking...",
+  "Reading the code...",
+  "Tracing logic...",
+  "Cross-referencing files...",
+  "Piecing it together...",
+  "Almost there...",
+];
+let thinkingTimer = null;
+
+function startThinkingCycle() {
+  let idx = 0;
+  setStatus(THINKING_PHRASES[idx], "loading");
+  thinkingTimer = setInterval(() => {
+    idx = (idx + 1) % THINKING_PHRASES.length;
+    setStatus(THINKING_PHRASES[idx], "loading");
+  }, 2200);
+}
+
+function stopThinkingCycle() {
+  if (thinkingTimer) {
+    clearInterval(thinkingTimer);
+    thinkingTimer = null;
+  }
+}
+
+// ---------- Elapsed-time badge ----------
+// A live "· 7s" counter next to the status text. Independent of whatever the
+// status text says, so the user always has proof the extension is still alive
+// even during silent stretches (cloning, multi-tool-call agent loops, etc).
+let elapsedStart = null;
+let elapsedInterval = null;
+let longWaitNudged = false;
+
+function startElapsedTimer(onLongWait) {
+  elapsedStart = Date.now();
+  longWaitNudged = false;
+  statusTimer.textContent = "· 0s";
+  elapsedInterval = setInterval(() => {
+    const secs = Math.floor((Date.now() - elapsedStart) / 1000);
+    statusTimer.textContent = `· ${secs}s`;
+    if (onLongWait && !longWaitNudged && secs >= 12) {
+      longWaitNudged = true;
+      onLongWait();
+    }
+  }, 1000);
+}
+
+function stopElapsedTimer() {
+  if (elapsedInterval) {
+    clearInterval(elapsedInterval);
+    elapsedInterval = null;
+  }
+  statusTimer.textContent = "";
+}
 
 // Turns a `repo://relative/path.py#L12-L34` citation into a real github.com blob
 // URL for the currently loaded repo. Returns null (render as plain text) when the
@@ -45,25 +160,44 @@ settingsBtn.addEventListener("click", () => chrome.runtime.openOptionsPage());
 
 function setProgress(fraction) {
   if (fraction == null) {
-    progressTrack.classList.remove("active");
+    progressTrack.classList.remove("active", "indeterminate");
     return;
   }
   progressTrack.classList.add("active");
+  progressTrack.classList.remove("indeterminate");
   progressFill.style.width = `${Math.round(fraction * 100)}%`;
+}
+
+// Shown before the backend has anything measurable to report (e.g. still
+// cloning the repo) — a moving segment reads as "working", not "stuck at 0%".
+function setProgressIndeterminate() {
+  progressTrack.classList.add("active", "indeterminate");
 }
 
 // ---------- Status bar ----------
 
+let statusSpinner = null;
+
 function setStatus(text, kind) {
-  statusBar.textContent = "";
   statusBar.className = kind ? kind : "";
+  statusText.textContent = text;
   if (kind === "loading") {
-    const spinner = document.createElement("span");
-    spinner.className = "spinner";
-    statusBar.appendChild(spinner);
+    if (!statusSpinner) {
+      statusSpinner = document.createElement("span");
+      statusSpinner.className = "spinner";
+      statusBar.insertBefore(statusSpinner, statusText);
+    }
+  } else if (statusSpinner) {
+    statusSpinner.remove();
+    statusSpinner = null;
   }
-  statusBar.appendChild(document.createTextNode(text));
 }
+
+// Cancel button in the status bar aborts whichever cancellable request is in flight.
+statusCancel.addEventListener("click", () => {
+  if (loadAbortController) loadAbortController.abort();
+  if (chatAbortController) chatAbortController.abort();
+});
 
 // ---------- Persistence ----------
 
@@ -72,7 +206,7 @@ function persistSession() {
     [STORAGE_KEY]: {
       repo: repoInput.value,
       sessionId,
-      model: modelSelect.value,
+      model: getModel(),
       messages,
       githubRepo,
       defaultBranch,
@@ -85,7 +219,7 @@ function restoreSession() {
     const saved = data[STORAGE_KEY];
     if (!saved) return;
     if (saved.repo) repoInput.value = saved.repo;
-    if (saved.model) modelSelect.value = saved.model;
+    if (saved.model) setModel(saved.model);
     if (saved.sessionId && Array.isArray(saved.messages)) {
       sessionId = saved.sessionId;
       messages = saved.messages;
@@ -135,7 +269,14 @@ function renderMessage(role, text, animate) {
 
 function setChatEnabled(enabled) {
   chatInput.disabled = !enabled;
-  sendBtn.disabled = !enabled || isBusy;
+  // Stays enabled while busy: at that point it's acting as the Stop button, not Send.
+  sendBtn.disabled = !enabled;
+}
+
+function setSendButtonBusy(busy) {
+  sendBtn.textContent = busy ? "■" : "➤";
+  sendBtn.title = busy ? "Stop generating" : "Send";
+  sendBtn.classList.toggle("stop-mode", busy);
 }
 
 function autoResizeInput() {
@@ -171,7 +312,19 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 // ---------- Load ----------
 
+function setLoadButtonBusy(busy) {
+  loadBtn.textContent = busy ? "Stop" : "Load";
+  loadBtn.classList.toggle("stop-mode", busy);
+  loadBtn.title = busy ? "Cancel loading" : "";
+}
+
 loadBtn.addEventListener("click", async () => {
+  if (loadAbortController) {
+    // Already loading — this click means "stop", not "start another load".
+    loadAbortController.abort();
+    return;
+  }
+
   const repo = repoInput.value.trim();
   if (!repo) {
     setStatus("Enter a repo path or URL first.", "error");
@@ -185,9 +338,11 @@ loadBtn.addEventListener("click", async () => {
     return;
   }
 
-  loadBtn.disabled = true;
+  loadAbortController = new AbortController();
+  setLoadButtonBusy(true);
   setStatus("Starting...", "loading");
-  setProgress(0);
+  setProgressIndeterminate();
+  startElapsedTimer(() => setStatus("Still working — first-time indexing of larger repos can take a minute or two.", "loading"));
   chatLog.querySelectorAll(".msg-row").forEach((el) => el.remove());
   messages = [];
   githubRepo = null;
@@ -200,7 +355,8 @@ loadBtn.addEventListener("click", async () => {
     const res = await fetch(`${BACKEND_URL}/load/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ repo, chat_model: modelSelect.value, groq_api_key: groqApiKey }),
+      body: JSON.stringify({ repo, chat_model: getModel(), groq_api_key: groqApiKey }),
+      signal: loadAbortController.signal,
     });
     if (!res.ok || !res.body) {
       const err = await res.json().catch(() => ({}));
@@ -251,11 +407,17 @@ loadBtn.addEventListener("click", async () => {
     chatInput.focus();
     persistSession();
   } catch (e) {
-    setStatus("Failed to load repo. Is the GitReader backend running on localhost:8000?", "error");
+    if (e.name === "AbortError") {
+      setStatus("Load cancelled.", "");
+    } else {
+      setStatus("Failed to load repo. Is the GitReader backend running on localhost:8000?", "error");
+      renderMessage("error", e.message);
+    }
     setProgress(null);
-    renderMessage("error", e.message);
   } finally {
-    loadBtn.disabled = false;
+    stopElapsedTimer();
+    loadAbortController = null;
+    setLoadButtonBusy(false);
   }
 });
 
@@ -273,8 +435,6 @@ clearBtn.addEventListener("click", () => {
   setStatus("Cleared. Load a repo to start a new session.");
   chrome.storage.local.remove(STORAGE_KEY);
 });
-
-modelSelect.addEventListener("change", persistSession);
 
 // ---------- Chat (streaming) ----------
 
@@ -297,16 +457,24 @@ const TOOL_LABELS = {
 
 chatForm.addEventListener("submit", async (e) => {
   e.preventDefault();
+  if (isBusy) {
+    // Send button doubles as Stop while a response is in flight.
+    chatAbortController?.abort();
+    return;
+  }
   const message = chatInput.value.trim();
-  if (!message || !sessionId || isBusy) return;
+  if (!message || !sessionId) return;
 
   renderMessage("user", message);
   messages.push({ role: "user", text: message });
   chatInput.value = "";
   autoResizeInput();
   isBusy = true;
-  setChatEnabled(true); // keep input focus-able, but send button disabled via isBusy
-  setStatus("Thinking...", "loading");
+  setChatEnabled(true); // keep input focus-able; sendBtn stays enabled to act as Stop
+  setSendButtonBusy(true);
+  startThinkingCycle();
+  startElapsedTimer(() => setStatus("Still working — chaining a few tool calls can take a bit longer.", "loading"));
+  chatAbortController = new AbortController();
 
   const pinnedToBottom = true;
   const row = document.createElement("div");
@@ -315,7 +483,8 @@ chatForm.addEventListener("submit", async (e) => {
   meta.className = "msg-meta";
   meta.textContent = "GitReader";
   const bubble = document.createElement("div");
-  bubble.className = "bubble cursor-blink";
+  bubble.className = "bubble skeleton";
+  bubble.innerHTML = '<div class="skeleton-line"></div><div class="skeleton-line"></div><div class="skeleton-line"></div>';
   row.appendChild(meta);
   row.appendChild(bubble);
   chatLog.appendChild(row);
@@ -324,12 +493,14 @@ chatForm.addEventListener("submit", async (e) => {
 
   let answerText = "";
   const seenTools = new Set();
+  let activePill = null;
 
   try {
     const res = await fetch(`${BACKEND_URL}/chat/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_id: sessionId, message }),
+      signal: chatAbortController.signal,
     });
     if (!res.ok || !res.body) {
       const err = await res.json().catch(() => ({}));
@@ -354,12 +525,25 @@ chatForm.addEventListener("submit", async (e) => {
         if (event.type === "tool") {
           if (!seenTools.has(event.tool)) {
             seenTools.add(event.tool);
+            if (activePill) activePill.classList.add("done");
             const pill = document.createElement("div");
             pill.className = "tool-pill";
-            pill.textContent = TOOL_LABELS[event.tool] || `🔧 ${event.tool}`;
+            const label = TOOL_LABELS[event.tool] || `🔧 ${event.tool}`;
+            pill.innerHTML = `<span class="pill-icon"><span class="spinner"></span><span class="check">✓</span></span><span class="pill-label">${label}</span>`;
             row.insertBefore(pill, bubble);
+            activePill = pill;
+            // Real tool activity is a better signal than the generic rotating
+            // phrases — stop guessing and report what's actually happening.
+            stopThinkingCycle();
+            setStatus(`${label}...`, "loading");
           }
         } else if (event.type === "token") {
+          if (!answerText) {
+            stopThinkingCycle();
+            setStatus("Writing response...", "loading");
+            bubble.classList.remove("skeleton");
+            bubble.innerHTML = "";
+          }
           answerText += event.text;
           bubble.innerHTML = renderMarkdown(answerText, resolveRepoLink) || "&nbsp;";
           bubble.classList.add("cursor-blink");
@@ -370,7 +554,10 @@ chatForm.addEventListener("submit", async (e) => {
       }
     }
 
-    bubble.classList.remove("cursor-blink");
+    stopThinkingCycle();
+    bubble.classList.remove("cursor-blink", "skeleton");
+    if (activePill) activePill.classList.add("done");
+    if (!answerText) bubble.innerHTML = "&nbsp;";
 
     if (streamError && !answerText) {
       throw new Error(streamError);
@@ -386,13 +573,32 @@ chatForm.addEventListener("submit", async (e) => {
     setStatus("Ready.", "success");
     persistSession();
   } catch (err) {
-    bubble.classList.remove("cursor-blink");
-    row.remove();
-    renderMessage("error", err.message);
-    messages.push({ role: "error", text: err.message });
-    setStatus("Error — see message above.", "error");
+    stopThinkingCycle();
+    bubble.classList.remove("cursor-blink", "skeleton");
+    if (activePill) activePill.classList.add("done");
+    if (err.name === "AbortError") {
+      if (answerText) {
+        // Keep whatever was streamed so far rather than throwing it away.
+        const note = document.createElement("div");
+        note.className = "msg-meta";
+        note.textContent = "(stopped)";
+        row.appendChild(note);
+        messages.push({ role: "assistant", text: answerText });
+      } else {
+        row.remove();
+      }
+      setStatus("Stopped.", "");
+    } else {
+      row.remove();
+      renderMessage("error", err.message);
+      messages.push({ role: "error", text: err.message });
+      setStatus("Error — see message above.", "error");
+    }
   } finally {
+    stopElapsedTimer();
     isBusy = false;
+    chatAbortController = null;
+    setSendButtonBusy(false);
     setChatEnabled(true);
     chatInput.focus();
   }

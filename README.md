@@ -26,8 +26,8 @@ gitreader/
     manifest.json
     background.js
     content.js
-    sidepanel.html
-    sidepanel.js
+    popup.html
+    popup.js
 ```
 
 ## 1. Prerequisites
@@ -71,8 +71,10 @@ python agent.py https://github.com/some-owner/some-repo
 1. Open `chrome://extensions`, enable **Developer mode** (top right).
 2. Click **Load unpacked**, select the `extension/` folder.
 3. Pin the GitReader icon to your toolbar.
-4. Visit any repo on github.com, click the GitReader icon — it opens a side panel
-   with the repo URL pre-filled (auto-detected from the page).
+4. Visit any repo on github.com, click the GitReader icon — it opens a compact
+   popup window with the repo URL pre-filled (auto-detected from the page). The
+   window stays open until you close it with the ✕ button, so a load or a
+   streaming answer won't get interrupted if you click back onto the page.
 5. Click **Load** (first load clones + indexes the repo, can take a bit depending on
    repo size and your machine), then start chatting.
 
@@ -102,8 +104,10 @@ auto-detected — the field is just pre-filled as a convenience.
   over HTTP on localhost.
 - The extension's `content.js` detects the `owner/repo` from the current
   github.com URL (re-checking on SPA navigation) and stores it via
-  `chrome.storage`; `sidepanel.js` reads that, calls the backend, and renders
-  the chat.
+  `chrome.storage`; `popup.js` reads that, calls the backend, and renders
+  the chat. `background.js` opens the UI as a persistent detached popup window
+  (`chrome.windows.create`) rather than a Chrome action popup, so it doesn't
+  force-close on blur.
 
 ## Known limitations / next steps
 

@@ -1,5 +1,5 @@
 // content.js — runs on github.com pages, detects the repo currently being viewed
-// and stores it so the side panel can auto-load it.
+// and stores it so the GitReader popup can auto-load it.
 
 const NON_REPO_SEGMENTS = new Set([
   "settings", "notifications", "marketplace", "explore", "topics",

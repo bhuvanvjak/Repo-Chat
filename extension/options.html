@@ -5,104 +5,118 @@
 <title>GitReader Setup</title>
 <style>
   :root {
-    color-scheme: light dark;
-    --bg: #ffffff;
-    --bg-subtle: #f6f8fa;
-    --border: #d0d7de;
-    --text: #1f2328;
-    --text-muted: #59636e;
-    --accent: #1f6feb;
+    color-scheme: dark;
+    --bg-deep: #05070d;
+    --glass: rgba(255, 255, 255, 0.045);
+    --glass-border: rgba(255, 255, 255, 0.09);
+    --text: #eef1fb;
+    --text-muted: #8b93ab;
+    --accent: #4f8cff;
+    --accent-2: #22d3ee;
     --accent-text: #ffffff;
-    --success: #1a7f37;
-    --error: #cf222e;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #0d1117;
-      --bg-subtle: #161b22;
-      --border: #30363d;
-      --text: #e6edf3;
-      --text-muted: #8b949e;
-      --accent: #388bfd;
-      --accent-text: #ffffff;
-      --success: #3fb950;
-      --error: #ff7b72;
-    }
+    --success: #2fe0b0;
+    --error: #ff8a97;
   }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
     margin: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    background: var(--bg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", Inter, sans-serif;
+    background: var(--bg-deep);
     color: var(--text);
     display: flex;
     justify-content: center;
-    padding: 48px 20px;
+    padding: 56px 20px;
+    position: relative;
+    overflow-x: hidden;
+    min-height: 100vh;
   }
-  .card {
-    max-width: 460px;
-    width: 100%;
+  body::before, body::after {
+    content: "";
+    position: fixed;
+    width: 380px;
+    height: 380px;
+    border-radius: 50%;
+    filter: blur(110px);
+    opacity: 0.24;
+    z-index: 0;
+    pointer-events: none;
   }
-  .logo-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 4px;
-  }
-  .logo-row .icon { font-size: 26px; }
-  h1 { font-size: 19px; margin: 0; }
+  body::before { top: -120px; left: -120px; background: var(--accent); animation: driftA 16s ease-in-out infinite alternate; }
+  body::after { bottom: -140px; right: -120px; background: var(--accent-2); animation: driftB 18s ease-in-out infinite alternate; }
+  @keyframes driftA { from { transform: translate(0, 0); } to { transform: translate(35px, 25px); } }
+  @keyframes driftB { from { transform: translate(0, 0); } to { transform: translate(-25px, -30px); } }
+
+  .card { max-width: 460px; width: 100%; position: relative; z-index: 1; }
+  .logo-row { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  .logo-row .icon { font-size: 26px; filter: drop-shadow(0 0 12px rgba(79, 140, 255, 0.55)); }
+  h1 { font-size: 19px; margin: 0; letter-spacing: 0.01em; }
   p.lede { color: var(--text-muted); font-size: 13.5px; line-height: 1.6; margin: 14px 0 22px; }
+
   .step {
-    background: var(--bg-subtle);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 16px 18px;
+    background: linear-gradient(155deg, rgba(255, 255, 255, 0.065), rgba(255, 255, 255, 0.02));
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    border: 1px solid var(--glass-border);
+    border-radius: 16px;
+    padding: 18px 20px;
     margin-bottom: 18px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.06);
   }
   .step h2 {
-    font-size: 12.5px;
+    font-size: 12px;
     text-transform: uppercase;
-    letter-spacing: 0.03em;
+    letter-spacing: 0.06em;
     color: var(--text-muted);
     margin: 0 0 10px;
   }
-  a { color: var(--accent); }
+  a { color: var(--accent-2); }
   .key-row { display: flex; gap: 6px; }
   input[type="password"], input[type="text"] {
     flex: 1;
-    padding: 9px 11px;
-    border-radius: 7px;
-    border: 1px solid var(--border);
-    background: var(--bg);
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--glass-border);
+    background: rgba(255, 255, 255, 0.04);
     color: var(--text);
     font-family: "SF Mono", Consolas, monospace;
     font-size: 13px;
     min-width: 0;
+    transition: box-shadow 0.2s ease, border-color 0.2s ease;
+  }
+  input[type="password"]:focus, input[type="text"]:focus {
+    outline: none;
+    border-color: rgba(79, 140, 255, 0.55);
+    box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.2);
   }
   button {
-    padding: 9px 14px;
-    border-radius: 7px;
+    padding: 10px 16px;
+    border-radius: 999px;
     border: none;
-    background: var(--accent);
+    background: linear-gradient(135deg, var(--accent), #6d5bff);
     color: var(--accent-text);
     cursor: pointer;
     font-size: 13px;
-    font-weight: 500;
+    font-weight: 600;
+    box-shadow: 0 2px 10px rgba(79, 140, 255, 0.25);
+    transition: transform 0.15s ease, box-shadow 0.2s ease;
   }
+  button:hover { transform: translateY(-1px); box-shadow: 0 0 18px rgba(79, 140, 255, 0.45); }
+  button:active { transform: translateY(0) scale(0.97); }
   button.ghost {
-    background: transparent;
+    background: rgba(255, 255, 255, 0.05);
     color: var(--text-muted);
-    border: 1px solid var(--border);
+    border: 1px solid var(--glass-border);
+    box-shadow: none;
+    border-radius: 10px;
+    padding: 10px 12px;
   }
+  button.ghost:hover { color: var(--text); box-shadow: none; }
   #save-btn { margin-top: 12px; width: 100%; }
-  #status {
-    margin-top: 10px;
-    font-size: 12.5px;
-    min-height: 16px;
-  }
+  #status { margin-top: 10px; font-size: 12.5px; min-height: 16px; color: var(--text-muted); }
   #status.success { color: var(--success); }
   #status.error { color: var(--error); }
-  footer { color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+  footer { color: var(--text-muted); font-size: 12px; line-height: 1.6; position: relative; z-index: 1; }
 </style>
 </head>
 <body>
